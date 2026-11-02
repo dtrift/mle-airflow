@@ -67,7 +67,9 @@ def transform(**kwargs):
     ti = kwargs['ti']
     data = ti.xcom_pull(task_ids='extract', key='extracted_data')
     data['target'] = (data['end_date'] != 'No').astype(int)
-    data['end_date'].replace({'No': None}, inplace=True)
+    # Присваивание вместо inplace: в pandas 3 (Copy-on-Write) replace с
+    # inplace=True модифицирует копию и тихо не применяется.
+    data['end_date'] = data['end_date'].replace({'No': None})
     ti.xcom_push('transformed_data', data)
 
 
@@ -75,6 +77,9 @@ def load(**kwargs):
     ti = kwargs['ti']
     data = ti.xcom_pull(task_ids='transform', key='transformed_data')
     hook = PostgresHook('destination_db')
+    # После XCom-раундтрипа None становятся NaN; psycopg3 отправляет их как
+    # double precision, и Postgres отвергает вставку в timestamp/varchar.
+    data = data.astype(object).where(data.notna(), None)
     hook.insert_rows(
         table='alt_users_churn',
         replace=True,
