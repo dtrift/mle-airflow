@@ -1,5 +1,5 @@
-import pendulum
 from airflow.decorators import dag, task
+import pendulum
 
 @dag(
     schedule='@once',

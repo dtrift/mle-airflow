@@ -1,7 +1,7 @@
 # dags/clean_churn.py
 
-import pendulum
 from airflow.decorators import dag, task
+import pendulum
 
 
 @dag(
@@ -17,8 +17,8 @@ def clean_churn_dataset():
     @task()
     def create_table():
         from sqlalchemy import (
-            Table, Column, DateTime, Float, Integer, Index,
-            MetaData, String, UniqueConstraint, inspect
+            Column, DateTime, Float, Index, Integer,
+            MetaData, String, Table, UniqueConstraint, inspect
         )
         hook = PostgresHook('destination_db')
         db_engine = hook.get_sqlalchemy_engine()
@@ -64,12 +64,25 @@ def clean_churn_dataset():
 
     @task()
     def transform(data: pd.DataFrame):
-        # дубликаты: совпадают все признаки и target, отличен только customer_id
+        # дубликаты: все признаки и target совпадают, отличен только customer_id
         feature_cols = data.columns.drop('customer_id').tolist()
         is_duplicated_features = data.duplicated(subset=feature_cols, keep=False)
         data = data[~is_duplicated_features].reset_index(drop=True)
 
-        # выбросы по IQR на float-признаках
+        # пропуски: end_date не трогаем, там NaN осмысленный.
+        # В pandas 3 строковые колонки приходят с dtype 'str', а не 'object',
+        # поэтому dtype-проверки урока тут не работают: числовым — среднее, остальным — мода
+        cols_with_nans = data.isnull().sum()
+        cols_with_nans = cols_with_nans[cols_with_nans > 0].index.drop('end_date')
+        for col in cols_with_nans:
+            if pd.api.types.is_numeric_dtype(data[col]):
+                fill_value = data[col].mean()
+            else:
+                fill_value = data[col].mode()[0]
+            data[col] = data[col].fillna(fill_value)
+
+        # выбросы по IQR на float-признаках — после заполнения пропусков:
+        # NaN в between() даёт False, и строки с пропусками ложно помечаются выбросами
         num_cols = data.select_dtypes(['float']).columns
         threshold = 1.5
         potential_outliers = pd.DataFrame()
@@ -83,16 +96,6 @@ def clean_churn_dataset():
             potential_outliers[col] = ~data[col].between(lower, upper)
         outliers = potential_outliers.any(axis=1)
         data = data[~outliers].reset_index(drop=True)
-
-        # пропуски: end_date не трогаем — там NaN осмысленный
-        cols_with_nans = data.isnull().sum()
-        cols_with_nans = cols_with_nans[cols_with_nans > 0].index.drop('end_date')
-        for col in cols_with_nans:
-            if data[col].dtype in [float, int]:
-                fill_value = data[col].mean()
-            elif data[col].dtype == 'object':
-                fill_value = data[col].mode()[0]
-            data[col] = data[col].fillna(fill_value)
 
         return data
 
