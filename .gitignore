@@ -160,3 +160,7 @@ cython_debug/
 #.idea/
 
 tmp/
+
+# Runtime-артефакты Airflow и локальный конфиг
+logs/
+config/
