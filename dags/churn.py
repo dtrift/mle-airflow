@@ -1,5 +1,5 @@
-import pendulum
 from airflow.sdk import dag, task
+import pendulum
 
 @dag(
     schedule=None,
