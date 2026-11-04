@@ -1,8 +1,8 @@
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 import pendulum
 
 @dag(
-    schedule='@once',
+    schedule=None,
     start_date=pendulum.datetime(2023, 1, 1, tz="UTC"),
     catchup=False,
     tags=["ETL"]
@@ -56,7 +56,7 @@ def prepare_churn_dataset():
 
         hook = PostgresHook('source_db')
         conn = hook.get_conn()
-        sql = f"""
+        sql = """
         select
             c.customer_id, c.begin_date, c.end_date, c.type, c.paperless_billing, c.payment_method, c.monthly_charges, c.total_charges,
             i.internet_service, i.online_security, i.online_backup, i.device_protection, i.tech_support, i.streaming_tv, i.streaming_movies,
@@ -74,12 +74,18 @@ def prepare_churn_dataset():
     @task()
     def transform(data: pd.DataFrame):
         data['target'] = (data['end_date'] != 'No').astype(int)
-        data['end_date'].replace({'No': None}, inplace=True)
+        # Присваивание вместо inplace: в pandas 3 (Copy-on-Write) замена через
+        # data['end_date'].replace(..., inplace=True) модифицирует копию и тихо не применяется.
+        data['end_date'] = data['end_date'].replace({'No': None})
         return data
 
     @task()
     def load(data: pd.DataFrame):
         hook = PostgresHook('destination_db')
+        # После XCom JSON-раундтрипа None в DataFrame становятся NaN;
+        # psycopg3 отправляет NaN как double precision, и Postgres отвергает
+        # вставку в timestamp/varchar. Конвертируем NaN/NaT обратно в None.
+        data = data.astype(object).where(data.notna(), None)
         hook.insert_rows(
             table="users_churn",
             replace=True,
